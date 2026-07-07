@@ -15,12 +15,70 @@
 
 ### 具体的な使い方（WIFでの活用方法）
 
-1. AWSの実行ロール（例: `my_service_role_for_agentcore_runtime`）を、AWS STSの一時クレデンシャル（`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN`）としてプロセスに渡す（`sample1.py`の`ensure_aws_session_token()`が実施）。
-2. GCP側のWorkload Identity Federation設定ファイル（`type: external_account`、AWSのIAMロールをGCPサービスアカウント`aws-agentcore-sa@dma-ltd-jp.iam.gserviceaccount.com`に偽装（impersonate）させる設定）を生成する（`sample1.py`の`create_gcp_workload_identity_config()`が実施）。
+1. AWSの実行ロール（例: Lambda/Fargate/AgentCore RuntimeなどのIAMロール）が持つAWS STSの一時クレデンシャル（`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN`）を取得し、MCPサーバーを起動する子プロセスの環境変数として渡す。
+2. GCP側のWorkload Identity Federation設定ファイル（`type: external_account`、AWSのIAMロールをGCPサービスアカウントに偽装（impersonate）させる設定）を用意する。EC2以外（Lambda/Fargate/AgentCore Runtimeなど）で動かす場合は、設定ファイル内の`credential_source.region_url`/`credential_source.url`（EC2メタデータサーバー参照用）を削除し、代わりに`environment_id: "aws1"`方式（環境変数経由でAWS一時クレデンシャルを渡す方式）に調整する。
 3. その設定ファイルのパスを環境変数`GOOGLE_APPLICATION_CREDENTIALS`としてMCPサーバーに渡す。
 4. 本フォークで追加した`get_gsc_service()`のADC（Application Default Credentials）フォールバックが、`google.auth.default(scopes=SCOPES)`経由でこのWIF設定を自動的に読み込み、ブラウザ操作や長期キーなしでSearch Console APIを呼び出せるようにする。
 
 この変更（`get_gsc_service()`へのADCフォールバック追加）は本家へのIssue/PR提案も検討中ですが、まずは社内フォークとして先行運用しています。詳細は `gsc_server.py` の `get_gsc_service()` 内のコメント、および環境変数リファレンスの `GOOGLE_APPLICATION_CREDENTIALS` / `GSC_USE_ADC` の項目を参照してください。
+
+言葉だけだとイメージしづらいので、[Strands Agents](https://strandsagents.com/)のMCPクライアントからこのフォークを呼び出すサンプルコードを載せます（AWS STSの一時クレデンシャルをそのまま環境変数として子プロセスに渡すだけのシンプルな例です）。
+
+```python
+import asyncio
+import os
+import json
+import boto3
+
+from mcp import StdioServerParameters, stdio_client
+from strands.tools.mcp import MCPClient
+
+async def gsc_sample():
+
+    # GCPコンソール > IAMと管理 > Workload Identity プール > 対象のプロバイダー
+    # > 「構成をダウンロード」から取得したJSONファイルのパス。
+    # EC2ではなくFargate/Lambda/AgentCore RuntimeなどでAWS STSクレデンシャルを
+    # 環境変数経由で渡す場合は、ダウンロードしたJSON内の
+    # credential_source.region_url / credential_source.url を削除しておくこと。
+    wi_json_path = "/path/to/workload-identity-config.json"
+
+    session = boto3.Session()
+    creds = session.get_credentials()
+    frozen_creds = creds.get_frozen_credentials()
+
+    gsc = MCPClient(
+        lambda: stdio_client(
+            StdioServerParameters(
+                command="uvx",
+                # 本家PyPI版ではなく、このADC対応フォークを明示的に指定する
+                args=[
+                    "--from", "git+https://github.com/okamoto-dts-stg-com/mcp-gsc@v0.3.2-adc2",
+                    "mcp-search-console",
+                ],
+                env={
+                    "GOOGLE_APPLICATION_CREDENTIALS": wi_json_path,
+                    "GSC_SKIP_OAUTH": "true",  # ヘッドレス環境なのでOAuthブラウザフローをスキップ
+                    "AWS_ACCESS_KEY_ID": frozen_creds.access_key,
+                    "AWS_SECRET_ACCESS_KEY": frozen_creds.secret_key,
+                    "AWS_SESSION_TOKEN": frozen_creds.token,
+                    "AWS_REGION": session.region_name,
+                },
+            )
+        )
+    )
+
+    with gsc:
+        tools = gsc.list_tools_sync()
+        result = await gsc.call_tool_async(
+            tool_use_id="test-1",
+            name="list_properties",
+            arguments={}
+        )
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+
+if __name__ == "__main__":
+    asyncio.run(gsc_sample())
+```
 
 ---
 
@@ -124,7 +182,7 @@
    - `GSC_SKIP_OAUTH=true`（ブラウザフローをスキップ）
    - `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` / `AWS_REGION`（AWS一時クレデンシャル。`environment_id: "aws1"`方式はAWS_PROFILEではなくこれらの環境変数を直接参照する）
 
-内部的には`get_gsc_service()`が`google.auth.default(scopes=SCOPES)`を呼び、`GOOGLE_APPLICATION_CREDENTIALS`の内容（`external_account`型を含む）を自動判別して認証します。実際の利用例はdatalakeリポジトリの `sample1.py`（`create_gcp_workload_identity_config()` / `ensure_aws_session_token()`）を参照してください。
+内部的には`get_gsc_service()`が`google.auth.default(scopes=SCOPES)`を呼び、`GOOGLE_APPLICATION_CREDENTIALS`の内容（`external_account`型を含む）を自動判別して認証します。具体的なコード例は上の「[なぜこのフォークを作ったか（Why）](#なぜこのフォークを作ったかwhy)」内のサンプルコードを参照してください。
 
 ### 手順2 — インストール
 
