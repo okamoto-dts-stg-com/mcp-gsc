@@ -1,148 +1,164 @@
-# Google Search Console MCP Server for SEOs
+# Google Search Console MCP Server（社内フォーク／日本語版）
 
-A Model Context Protocol (MCP) server that connects [Google Search Console](https://search.google.com/search-console/about) (GSC) to AI assistants, allowing you to analyze your SEO data through natural language conversations. Works with **Claude Desktop**, **Cursor**, **Codex CLI**, **Gemini CLI**, **Antigravity**, and any other MCP-compatible client.
+[Google Search Console](https://search.google.com/search-console/about)（GSC）をAIアシスタントに接続し、自然言語でSEOデータを分析できるようにするModel Context Protocol（MCP）サーバーです。**Claude Desktop**、**Cursor**、**Codex CLI**、**Gemini CLI**、**Antigravity**、その他MCP対応クライアント全般で利用できます。
 
-> **Skip setup, get more.** A more advanced hosted version — one-click sign-in, added GA4 tools. Works with Claude Desktop, Claude Code, Claude.ai, Codex, Cursor, and any MCP client. Only **100 seats**.
-> → [**Advanced GSC MCP (hosted)**](https://www.advancedgsc.com/mcp?utm_source=github&utm_medium=readme&utm_campaign=mcp-gsc&utm_content=hero-callout)
-
----
-
-## What's New
-
-### [0.3.2] — April 2026
-- **OAuth browser flow fixed for uvx** — removed the `isatty` block that prevented the browser login window from opening when running as an MCP subprocess on macOS. OAuth now works out of the box with `uvx`, no manual terminal run needed.
-- **`get_capabilities` tool added** — call this to get a full list of available tools and current auth status in one shot. Useful when your AI assistant isn't sure what tools are available.
-- **Better auth error messages** — all tools now tell you exactly what to do when credentials are missing or expired.
+本READMEは、本家 [AminForou/mcp-gsc](https://github.com/AminForou/mcp-gsc) をフォークし、日本語ドキュメント化＋社内向けの認証方式（後述）を追加した社内フォークのものです。
 
 ---
 
-## What Can This Do?
+## なぜこのフォークを作ったか（Why）
 
-**Property Management**
-- See all your GSC properties in one place
-- Get verification details and ownership information
-- Add or remove properties from your account
+本家のGSC MCPサーバーは認証方式として「OAuthブラウザログイン」または「サービスアカウントJSONキー（`GSC_CREDENTIALS_PATH`）」の2つしかサポートしていません。しかし、私たちの実行基盤（AWS Bedrock AgentCore上のコンテナ）では、この2つがどちらも使えませんでした。
 
-**Search Analytics & Reporting**
-- Discover which queries bring visitors to your site
-- Track impressions, clicks, and click-through rates
-- Analyze performance trends and compare time periods
-- Visualize data with charts created by your AI assistant
+- **OAuthブラウザログイン**：サーバーはヘッドレスなコンテナで動くため、ブラウザを開いてログインすることができません。
+- **サービスアカウントJSONキー**：長期間有効なキーファイルをコンテナイメージやSecrets Managerに保管する必要があり、キーローテーションの手間や漏洩リスクが増えます。私たちは既にGoogle Analytics / BigQuery MCP連携で **AWS Workload Identity Federation（WIF）** を採用しており、長期キーを一切持たない運用にしています。GSCだけ別方式（サービスアカウントキー）にするのは一貫性がなく、セキュリティ的にも後退でした。
 
-**URL Inspection & Indexing**
-- Check if specific pages have indexing problems
-- See when Google last crawled your pages
-- Inspect multiple URLs at once to identify patterns
+### 具体的な使い方（WIFでの活用方法）
 
-**Sitemap Management**
-- View all sitemaps and their status
-- Submit new sitemaps
-- Check for errors or warnings
+1. AWSの実行ロール（例: `my_service_role_for_agentcore_runtime`）を、AWS STSの一時クレデンシャル（`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN`）としてプロセスに渡す（`sample1.py`の`ensure_aws_session_token()`が実施）。
+2. GCP側のWorkload Identity Federation設定ファイル（`type: external_account`、AWSのIAMロールをGCPサービスアカウント`aws-agentcore-sa@dma-ltd-jp.iam.gserviceaccount.com`に偽装（impersonate）させる設定）を生成する（`sample1.py`の`create_gcp_workload_identity_config()`が実施）。
+3. その設定ファイルのパスを環境変数`GOOGLE_APPLICATION_CREDENTIALS`としてMCPサーバーに渡す。
+4. 本フォークで追加した`get_gsc_service()`のADC（Application Default Credentials）フォールバックが、`google.auth.default(scopes=SCOPES)`経由でこのWIF設定を自動的に読み込み、ブラウザ操作や長期キーなしでSearch Console APIを呼び出せるようにする。
+
+この変更（`get_gsc_service()`へのADCフォールバック追加）は本家へのIssue/PR提案も検討中ですが、まずは社内フォークとして先行運用しています。詳細は `gsc_server.py` の `get_gsc_service()` 内のコメント、および環境変数リファレンスの `GOOGLE_APPLICATION_CREDENTIALS` / `GSC_USE_ADC` の項目を参照してください。
 
 ---
 
-## Available Tools
+## 更新履歴（このフォーク独自の変更）
 
-| Tool | What It Does | What You Need to Provide |
+### 社内パッチ — 2026年7月
+- **ADC（Application Default Credentials）フォールバックを追加** — `GOOGLE_APPLICATION_CREDENTIALS`が設定されている場合（または`GSC_USE_ADC=true`の場合）、`google.auth.default()`経由で認証を試みるようにした。Workload Identity Federation・GCE/Cloud Runメタデータ・gcloudユーザーADCなど、サービスアカウントJSONキー以外の資格情報でも動作するようになる。既存のOAuth／サービスアカウントJSONキーの挙動には一切変更なし（追加のフォールバックのみ）。
+
+### 本家の更新履歴
+
+#### [0.3.2] — 2026年4月
+- **uvx利用時のOAuthブラウザフローを修正** — macOS上でMCPサブプロセスとして実行した際にブラウザログイン画面が開かない原因だった`isatty`チェックを削除。`uvx`だけでOAuthがそのまま動作するようになった。
+- **`get_capabilities`ツールを追加** — 一度の呼び出しで利用可能な全ツール一覧と現在の認証状態を確認できる。AIアシスタントがどのツールを使えるか分からない場合に有用。
+- **認証エラーメッセージを改善** — 資格情報が不足・失効している場合に、具体的な対処方法を全ツールが案内するようになった。
+
+---
+
+## できること
+
+**プロパティ管理**
+- 保有する全GSCプロパティを一覧表示
+- 所有権確認の詳細情報を取得
+- アカウントへのプロパティ追加・削除
+
+**検索アナリティクス・レポート**
+- サイトに流入している検索クエリを把握
+- 表示回数・クリック数・CTRを追跡
+- パフォーマンス推移の分析、期間比較
+- AIアシスタントが作成するグラフでデータを可視化
+
+**URL検査・インデックス状況**
+- 特定ページのインデックス問題を確認
+- Googleが最後にクロールした日時を確認
+- 複数URLを一括検査してパターンを把握
+
+**サイトマップ管理**
+- 全サイトマップとその状態を確認
+- 新規サイトマップの送信
+- エラー・警告の確認
+
+---
+
+## 利用可能なツール
+
+| ツール | 内容 | 必要な入力 |
 |------|-------------|--------------------------|
-| `get_capabilities` | Lists all tools and shows auth status — call this first if unsure | Nothing |
-| `list_properties` | Shows all your GSC properties | Nothing |
-| `get_site_details` | Details about a specific site | Site URL |
-| `get_search_analytics` | Top queries and pages with clicks, impressions, CTR, position | Site URL, time period |
-| `get_performance_overview` | Summary of site performance | Site URL, time period |
-| `compare_search_periods` | Compare performance between two time periods | Site URL, two date ranges |
-| `get_search_by_page_query` | Search terms driving traffic to a specific page | Site URL, page URL |
-| `get_advanced_search_analytics` | Analytics with filters by country, device, query, page | Site URL |
-| `inspect_url_enhanced` | Detailed crawl/index status for a URL | Site URL, page URL |
-| `batch_url_inspection` | Inspect up to 10 URLs at once | Site URL, list of URLs |
-| `check_indexing_issues` | Check multiple URLs for indexing problems | Site URL, list of URLs |
-| `get_sitemaps` | Lists all sitemaps for a site | Site URL |
-| `list_sitemaps_enhanced` | Detailed sitemap info including errors and warnings | Site URL |
-| `manage_sitemaps` | Submit or delete sitemaps | Site URL, action |
-| `reauthenticate` | Re-run the OAuth browser login (switch accounts) | Nothing |
+| `get_capabilities` | 全ツール一覧と認証状態を表示。迷ったらまずこれを呼ぶ | なし |
+| `list_properties` | 全GSCプロパティを表示 | なし |
+| `get_site_details` | 特定サイトの詳細情報 | Site URL |
+| `get_search_analytics` | クリック・表示回数・CTR・順位を含む上位クエリ・ページ | Site URL, 期間 |
+| `get_performance_overview` | サイトパフォーマンスのサマリ | Site URL, 期間 |
+| `compare_search_periods` | 2つの期間のパフォーマンス比較 | Site URL, 2つの日付範囲 |
+| `get_search_by_page_query` | 特定ページへの流入クエリ | Site URL, page URL |
+| `get_advanced_search_analytics` | 国・デバイス・クエリ・ページで絞り込む高度なアナリティクス | Site URL |
+| `inspect_url_enhanced` | URLのクロール・インデックス状況の詳細 | Site URL, page URL |
+| `batch_url_inspection` | 最大10件のURLを一括検査 | Site URL, URLリスト |
+| `check_indexing_issues` | 複数URLのインデックス問題を確認 | Site URL, URLリスト |
+| `get_sitemaps` | サイトの全サイトマップ一覧 | Site URL |
+| `list_sitemaps_enhanced` | エラー・警告を含むサイトマップの詳細 | Site URL |
+| `manage_sitemaps` | サイトマップの送信・削除 | Site URL, action |
+| `reauthenticate` | OAuthログインをやり直す（アカウント切り替え） | なし |
 
-*Ask your AI assistant to "call get_capabilities" for the full list of all 20 tools.*
-
----
-
-<div align="center">
-  <a href="https://www.advancedgsc.com/mcp?utm_source=github&utm_medium=readme&utm_campaign=mcp-gsc&utm_content=banner">
-    <img src="assets/mcp-banner.png" alt="Skip setup — try the hosted MCP server with one-click Google sign-in. Works in ChatGPT and Claude web. Includes GA4 and advanced SEO tools." width="800" style="margin: 20px 0; border-radius: 8px;">
-  </a>
-</div>
+*全20ツールの一覧は、AIアシスタントに「get_capabilitiesを呼んで」と依頼すれば確認できます。*
 
 ---
 
-## Getting Started
+## はじめに
 
-### Step 1 — Set Up Google API Credentials
+### 手順1 — Google API認証情報の設定
 
-You need credentials before configuring any client. Pick one method:
+どのクライアントで使う場合も、事前に認証情報が必要です。以下のいずれかを選んでください。
 
-#### Option A — OAuth (Recommended — uses your own Google account)
+#### オプションA — OAuth（推奨　自分のGoogleアカウントを使用）
 
-1. Go to [Google Cloud Console](https://console.cloud.google.com/) and create or select a project
-2. [Enable the Search Console API](https://console.cloud.google.com/apis/library/searchconsole.googleapis.com)
-3. Go to [Credentials](https://console.cloud.google.com/apis/credentials) → Create Credentials → **OAuth client ID**
-4. Configure the OAuth consent screen, select **Desktop app**, click Create
-5. Download the JSON file — save it somewhere permanent (e.g. `~/Documents/client_secrets.json`)
+1. [Google Cloud Console](https://console.cloud.google.com/) でプロジェクトを作成／選択
+2. [Search Console APIを有効化](https://console.cloud.google.com/apis/library/searchconsole.googleapis.com)
+3. [認証情報](https://console.cloud.google.com/apis/credentials) → 認証情報を作成 → **OAuthクライアントID**
+4. OAuth同意画面を設定し、**デスクトップアプリ**を選択して作成
+5. JSONファイルをダウンロードし、永続的な場所に保存（例: `~/Documents/client_secrets.json`）
 
-On first use, a browser window will open asking you to sign in to your Google account. After that, the token is saved and no browser interaction is needed again.
+初回利用時にブラウザが開き、Googleアカウントログインを求められます。以後はトークンが保存され、ブラウザ操作は不要になります。
 
-#### Option B — Service Account (For automation or team use)
+#### オプションB — サービスアカウント（自動化・チーム利用向け）
 
-1. Go to [Google Cloud Console](https://console.cloud.google.com/) and create or select a project
-2. [Enable the Search Console API](https://console.cloud.google.com/apis/library/searchconsole.googleapis.com)
-3. Go to [Credentials](https://console.cloud.google.com/apis/credentials) → Create Credentials → **Service Account**
-4. Go to the Keys tab → Add Key → Create new key → JSON → Download
-5. Save the file somewhere permanent (e.g. `~/Documents/service_account.json`)
-6. Add the service account email to your GSC property: Search Console → Settings → Users and permissions → Add user → Full access
+1. [Google Cloud Console](https://console.cloud.google.com/) でプロジェクトを作成／選択
+2. [Search Console APIを有効化](https://console.cloud.google.com/apis/library/searchconsole.googleapis.com)
+3. [認証情報](https://console.cloud.google.com/apis/credentials) → 認証情報を作成 → **サービスアカウント**
+4. 「キー」タブ → キーを追加 → 新しいキーを作成 → JSON → ダウンロード
+5. 永続的な場所に保存（例: `~/Documents/service_account.json`）
+6. そのサービスアカウントのメールアドレスをGSCプロパティに登録：Search Console → 設定 → ユーザーと権限 → ユーザーを追加 → フル権限
 
-#### 🎥 Watch the step-by-step setup tutorial for this section
+#### オプションC — Workload Identity Federation / ADC（このフォークで新規追加、ヘッドレスサーバー向け）
 
-<div align="center">
-  <a href="https://www.youtube.com/watch?v=vhIOoD7B8Ow">
-    <img src="assets/new-video-thumbnail.jpg" alt="GSC MCP Server Installation Guide 2026" width="600" style="margin: 20px 0; border-radius: 8px;">
-  </a>
-</div>
+サービスアカウントJSONキーをコンテナに配置したくない場合（AWS Bedrock AgentCoreなど）の方法です。
 
-*Updated 2026 — covers the full installation process using the new uvx method, from setting up your Google credentials to your first successful query.*
+1. GCP側でWorkload Identity PoolとProviderを作成し、AWSのIAMロールがGCPサービスアカウントを偽装（impersonate）できるように設定する（GCP公式ドキュメント参照）。
+2. そのサービスアカウントのメールアドレスをGSCプロパティの「ユーザーと権限」に登録（Option Bの手順6と同じ）。
+3. GCPが発行するWIF設定JSON（`type: external_account`）を取得し、AWS EC2メタデータ用の`credential_source.region_url`/`credential_source.url`を削除して代わりに`environment_id: "aws1"`方式（環境変数経由でAWS一時クレデンシャルを渡す方式）に調整する。
+4. MCPサーバー起動時に以下の環境変数を渡す：
+   - `GOOGLE_APPLICATION_CREDENTIALS`: 上記WIF設定JSONのパス
+   - `GSC_SKIP_OAUTH=true`（ブラウザフローをスキップ）
+   - `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` / `AWS_REGION`（AWS一時クレデンシャル。`environment_id: "aws1"`方式はAWS_PROFILEではなくこれらの環境変数を直接参照する）
 
----
+内部的には`get_gsc_service()`が`google.auth.default(scopes=SCOPES)`を呼び、`GOOGLE_APPLICATION_CREDENTIALS`の内容（`external_account`型を含む）を自動判別して認証します。実際の利用例はdatalakeリポジトリの `sample1.py`（`create_gcp_workload_identity_config()` / `ensure_aws_session_token()`）を参照してください。
 
-### Step 2 — Installation
+### 手順2 — インストール
 
-#### Option A — uvx (Recommended)
+#### オプションA — uvx（推奨）
 
-No cloning, no Python installation, no virtual environments. `uvx` downloads and runs the server automatically and keeps it up to date.
+クローン不要、Pythonインストール不要、仮想環境不要。`uvx`がサーバーを自動ダウンロード・実行し、常に最新に保ちます。
 
-**Install uv** — open Terminal and run all three commands in order:
+**uvのインストール** — ターミナルを開き、以下3つを順番に実行：
 
 ```bash
-# 1. Download and install
+# 1. ダウンロードとインストール
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# 2. Activate in the current Terminal session
+# 2. 現在のターミナルセッションで有効化
 source $HOME/.local/bin/env
 
-# 3. Make it permanent for all future sessions
+# 3. 今後の全セッションで永続化
 echo 'source $HOME/.local/bin/env' >> ~/.zshrc
 ```
 
-Verify:
+確認：
 ```bash
 uv --version
 ```
 
-> **Why all three commands?** The installer puts `uv` in `~/.local/bin`, but your already-open Terminal session doesn't know about that folder yet. Step 2 activates it immediately. Step 3 ensures every future Terminal window has it automatically.
+> **なぜ3つ必要か？** インストーラーは`uv`を`~/.local/bin`に配置しますが、既に開いているターミナルセッションはそのフォルダをまだ認識していません。手順2で即座に有効化し、手順3で以降の全ターミナルウィンドウで自動反映させます。
 
-Now configure your AI client:
+AIクライアントを設定：
 
 ---
 
 **Claude Desktop**
 
-Config file: `~/Library/Application Support/Claude/claude_desktop_config.json`
+設定ファイル: `~/Library/Application Support/Claude/claude_desktop_config.json`
 
 OAuth:
 ```json
@@ -159,7 +175,7 @@ OAuth:
 }
 ```
 
-Service Account:
+サービスアカウント:
 ```json
 {
   "mcpServers": {
@@ -179,7 +195,7 @@ Service Account:
 
 **Cursor**
 
-Config file: `~/.cursor/mcp.json`
+設定ファイル: `~/.cursor/mcp.json`
 
 OAuth:
 ```json
@@ -200,7 +216,7 @@ OAuth:
 
 **Codex CLI**
 
-Config file: `~/.codex/config.toml`
+設定ファイル: `~/.codex/config.toml`
 
 OAuth:
 ```toml
@@ -211,7 +227,7 @@ enabled = true
 env = { GSC_OAUTH_CLIENT_SECRETS_FILE = "/full/path/to/client_secrets.json" }
 ```
 
-Service Account:
+サービスアカウント:
 ```toml
 [mcp_servers.gscServer]
 command = "/FULL/PATH/TO/uvx"
@@ -222,45 +238,35 @@ env = { GSC_CREDENTIALS_PATH = "/full/path/to/service_account.json", GSC_SKIP_OA
 
 ---
 
-> **Finding your uvx path:** On macOS/Linux run `which uvx` in Terminal after installing uv (typically `/Users/YOUR_NAME/.local/bin/uvx`). On Windows, run `Get-Command uvx | Select-Object -ExpandProperty Source` in PowerShell (or `where uvx` in cmd) — it's usually `C:\Users\YOUR_NAME\.local\bin\uvx.exe`. Replace `/FULL/PATH/TO/uvx` in the configs above with that path.
+> **uvxのパスの見つけ方：** macOS/Linuxでは、uvインストール後に`which uvx`を実行（通常は`/Users/YOUR_NAME/.local/bin/uvx`）。Windowsでは、PowerShellで`Get-Command uvx | Select-Object -ExpandProperty Source`（またはcmdで`where uvx`）を実行（通常は`C:\Users\YOUR_NAME\.local\bin\uvx.exe`）。上記設定の`/FULL/PATH/TO/uvx`をそのパスに置き換えてください。
 >
-> **Why the full path?** GUI apps like Claude Desktop and Cursor launch without reading your shell config (`~/.zshrc`), so they don't know about `~/.local/bin`. Using the full path guarantees it works regardless of how the app is launched. If you see a `spawn uvx ENOENT` error, this is the fix.
+> **なぜフルパスが必要か？** Claude DesktopやCursorなどのGUIアプリはシェル設定（`~/.zshrc`）を読まずに起動するため、`~/.local/bin`を認識できません。フルパスを使えば、起動方法に依存せず確実に動作します。`spawn uvx ENOENT`エラーが出たらこれが原因です。
 
-After saving the config, **fully quit the app (`Cmd+Q`) and reopen it**.
+設定保存後、**アプリを完全に終了（`Cmd+Q`）して再起動**してください。
 
-For OAuth: on first use, a browser window will open automatically for login. After that, the token is cached and you won't be asked again.
+OAuthの場合：初回利用時にブラウザが自動で開きログインを求められます。以後はトークンがキャッシュされ、再度求められません。
 
 ---
 
-#### Option B — Clone (Advanced)
+#### オプションB — クローン（上級者向け）
 
-**Prefer a video walkthrough for this method?** The tutorial below covers the clone install path step by step — virtual environment setup, dependencies, and config:
+コードを修正したい場合や、特定のローカルバージョンを実行したい場合はこちらを使用してください。
 
-<div align="center">
-  <a href="https://youtu.be/PCWsK5BgSd0">
-    <img src="https://i.ytimg.com/vi/PCWsK5BgSd0/maxresdefault.jpg" alt="Google Search Console API Setup Tutorial" width="600" style="margin: 20px 0; border-radius: 8px;">
-  </a>
-</div>
+> **Python 3.11+が必須です。** Python 3.10以下ではサーバーが起動しません。Claude DesktopなどGUIクライアントから起動された場合、ツールが1つも表示されずログも出ないため、原因特定が困難です。`python --version`でバージョンを確認し、3.11未満ならアップデートしてください。uvx方式（オプションA）ならPythonバージョンを自動管理するため、この問題を回避できます。
 
-Use this if you want to modify the code or run a specific local version. This method uses the video tutorial above for the credential setup steps.
-
-> **Requires Python 3.11+.** This server will not start on Python 3.10 or older — and when it's launched by a GUI client like Claude Desktop, it fails silently (no tools appear and no log file is written). Check your version with `python --version`. If it's below 3.11, install [Python 3.11 or newer](https://www.python.org/downloads/) and recreate your virtual environment. The uvx method (Option A) avoids this entirely by managing the Python version for you, so it's the recommended path on Windows.
-
-**Clone the repo:**
+**リポジトリをクローン：**
 ```bash
-git clone https://github.com/AminForou/mcp-gsc.git
+git clone https://github.com/okamoto-dts-stg-com/mcp-gsc.git
 cd mcp-gsc
 ```
 
-Or download the ZIP from the green Code button at the top of this page and unzip it.
-
-**Set up the environment:**
+**環境をセットアップ：**
 ```bash
 uv venv .venv
 uv pip install -r requirements.txt
 ```
 
-**Configure your AI client** (Claude Desktop example):
+**AIクライアントを設定**（Claude Desktopの例）：
 
 OAuth:
 ```json
@@ -277,7 +283,7 @@ OAuth:
 }
 ```
 
-Service Account:
+サービスアカウント:
 ```json
 {
   "mcpServers": {
@@ -293,118 +299,120 @@ Service Account:
 }
 ```
 
-Mac path examples:
+Macパス例：
 - Python: `/Users/yourname/Documents/mcp-gsc/.venv/bin/python`
-- Script: `/Users/yourname/Documents/mcp-gsc/gsc_server.py`
+- スクリプト: `/Users/yourname/Documents/mcp-gsc/gsc_server.py`
 
 ---
 
-### Step 3 — Test
+### 手順3 — テスト
 
-Ask your AI assistant: **"List my GSC properties"**
+AIアシスタントに尋ねてみましょう：**「GSCのプロパティ一覧を見せて」**
 
-If you see your properties — it's working. If not, ask: **"Call get_capabilities"** to see auth status and diagnose the issue.
+プロパティが表示されれば成功です。表示されなければ、**「get_capabilitiesを呼んで」**と依頼して認証状態と問題を診断してください。
 
 ---
 
-## Environment Variables Reference
+## 環境変数リファレンス
 
-| Variable | Required | Default | Description |
+| 変数 | 必須か | デフォルト | 説明 |
 |---|---|---|---|
-| `GSC_OAUTH_CLIENT_SECRETS_FILE` | OAuth only | — | Absolute path to your OAuth client secrets JSON. Always required when using `uvx`. |
-| `GSC_CREDENTIALS_PATH` | Service account only | — | Absolute path to your service account JSON key. Always required when using `uvx`. |
-| `GSC_SKIP_OAUTH` | No | `false` | Set to `"true"` to force service account auth and skip OAuth entirely |
-| `GSC_DATA_STATE` | No | `"all"` | `"all"` matches the GSC dashboard. `"final"` returns only confirmed data (2–3 day lag). |
-| `GSC_ALLOW_DESTRUCTIVE` | No | `false` | Set to `"true"` to enable add/delete site and delete sitemap tools |
+| `GSC_OAUTH_CLIENT_SECRETS_FILE` | OAuthのみ | — | OAuthクライアントシークレットJSONへの絶対パス。`uvx`利用時は必須。 |
+| `GSC_CREDENTIALS_PATH` | サービスアカウントのみ | — | サービスアカウントJSONキーへの絶対パス。`uvx`利用時は必須。`type: service_account`形式のJSONのみ対応。 |
+| `GOOGLE_APPLICATION_CREDENTIALS` | ADCのみ（このフォークで新規） | — | ADC経由で認証する場合の資格情報JSONへの絶対パス。Workload Identity Federation（`external_account`）やGCE/Cloud Runメタデータなど、`service_account`以外の形式も自動判別。 |
+| `GSC_USE_ADC` | いいえ（このフォークで新規） | `false` | `"true"`にすると、`GOOGLE_APPLICATION_CREDENTIALS`未設定でもADCパスを強制的に試行（GCE/Cloud Runメタデータなどのアンビエント資格情報向け）。 |
+| `GSC_SKIP_OAUTH` | いいえ | `false` | `"true"`にするとOAuthを完全にスキップしてサービスアカウント/ADC認証を強制 |
+| `GSC_DATA_STATE` | いいえ | `"all"` | `"all"`はGSCダッシュボードと一致。`"final"`は確定済みデータのみ（2～3日の遅延）。 |
+| `GSC_ALLOW_DESTRUCTIVE` | いいえ | `false` | `"true"`にするとサイトの追加/削除・サイトマップ削除ツールを有効化 |
 
 ---
 
 ## Cursor Marketplace
 
-One-click install available — search for `mcp-search-console` in the Cursor Marketplace.
+（上流パッケージ`mcp-search-console`はCursor Marketplaceでワンクリックインストールできますが、**この社内フォーク自体はMarketplaceには公開していません**。上流版を使う場合の参考情報として残しています。）
 
-After installing, configure your credentials (see Step 1 above) then use the bundled skills directly in Cursor Agent chat:
+インストール後、認証情報（上記手順1）を設定すれば、Cursor Agentチャットで以下のスキルを利用できます：
 
-| Skill | How to invoke | What it does |
+| スキル | 呼び出し方 | 内容 |
 |---|---|---|
-| `seo-weekly-report` | *"Run the SEO weekly report for example.com"* | Full 28-day performance summary with period-over-period comparison and top queries |
-| `cannibalization-check` | *"Check for keyword cannibalization on example.com"* | Finds queries where multiple pages compete; recommends which to keep |
-| `indexing-audit` | *"Audit indexing for my top pages"* | Batch-inspects top 20 pages and returns a prioritized fix list |
-| `content-opportunities` | *"Find content opportunities for example.com"* | Surfaces position-11-20 queries with high impressions and low CTR |
+| `seo-weekly-report` | 「example.comのSEO週次レポートを実行して」 | 期間比較と上位クエリを含む週次28日間パフォーマンスサマリ |
+| `cannibalization-check` | 「example.comのキーワードカニバライゼーションをチェックして」 | 複数ページが竞合するクエリを検出し、残すべきページを提案 |
+| `indexing-audit` | 「上位ページのインデックススを監査して」 | 上位20ページを一括検査し、優先度付き修正リストを返す |
+| `content-opportunities` | 「example.comのコンテンツ改善機会を見つけて」 | 表示回数多・CTR低の順位11-20位クエリを抽出 |
 
 ---
 
-## Sample Prompts
+## サンプルプロンプト
 
-| Tool | Sample Prompt |
+| ツール | サンプルプロンプト |
 |------|--------------|
-| `list_properties` | "List all my GSC properties and tell me which ones have the most pages indexed." |
-| `get_search_analytics` | "Show me the top 20 search queries for mywebsite.com in the last 30 days, highlight any with CTR below 2%, and suggest title improvements." |
-| `get_performance_overview` | "Create a visual performance overview of mywebsite.com for the last 28 days, identify any unusual drops or spikes, and explain possible causes." |
-| `check_indexing_issues` | "Check these pages for indexing issues: mywebsite.com/product, mywebsite.com/services, mywebsite.com/about" |
-| `inspect_url_enhanced` | "Do a comprehensive inspection of mywebsite.com/landing-page and give me actionable recommendations." |
-| `compare_search_periods` | "Compare my site's performance between January and February. What queries improved the most?" |
-| `get_advanced_search_analytics` | "Analyze queries with high impressions but positions below 10, filtered to mobile traffic in the US only." |
+| `list_properties` | 「自分のGSCプロパティを全部表示して、どれが一番インデックスされているか教えて」 |
+| `get_search_analytics` | 「mywebsite.comの直近30日間の上位20クエリを見せて、CTRが2%未満のものをハイライトしてタイトル改善案を提案して」 |
+| `get_performance_overview` | 「mywebsite.comの直近28日間のパフォーマンス概要をグラフ化し、異常な低下/急増を指摘して原因を推測して」 |
+| `check_indexing_issues` | 「このページのインデックス問題を確認して: mywebsite.com/product, mywebsite.com/services, mywebsite.com/about」 |
+| `inspect_url_enhanced` | 「mywebsite.com/landing-pageを徹底的に検査して、改善提案をして」 |
+| `compare_search_periods` | 「1月と2月のサイトパフォーマンスを比較して、改善したクエリを教えて」 |
+| `get_advanced_search_analytics` | 「表示回数が多く順位10以下のクエリを、米国のモバイルトラフィックに絞って分析して」 |
 
 ---
 
-## Troubleshooting
+## トラブルシューティング
 
-### `spawn uvx ENOENT` or `command not found: uvx`
+### `spawn uvx ENOENT` または `command not found: uvx`
 
-Your AI client can't find `uvx`. Use the full path instead of just `uvx`:
+AIクライアントが`uvx`を見つけられていません。`uvx`だけでなくフルパスを使用してください：
 
 ```bash
-# Find your full path (macOS/Linux):
+# フルパスを確認（macOS/Linux）:
 which uvx
-# Typically: /Users/YOUR_NAME/.local/bin/uvx
+# 通常: /Users/YOUR_NAME/.local/bin/uvx
 ```
 
 ```powershell
-# Find your full path (Windows PowerShell):
+# フルパスを確認（Windows PowerShell）:
 Get-Command uvx | Select-Object -ExpandProperty Source
-# Typically: C:\Users\YOUR_NAME\.local\bin\uvx.exe
+# 通常: C:\Users\YOUR_NAME\.local\bin\uvx.exe
 ```
 
-Replace `"command": "uvx"` with the full path (e.g. `"command": "/Users/YOUR_NAME/.local/bin/uvx"`) in your config.
+設定の`"command": "uvx"`をフルパス（例: `"command": "/Users/YOUR_NAME/.local/bin/uvx"`）に置き換えてください。
 
-### `uv --version` gives "command not found" right after installing
+### インストール直後に`uv --version`が「command not found」になる
 
-The installer updates `~/.local/bin` but your current Terminal session doesn't see it yet. Run:
+インストーラーは`~/.local/bin`を更新しますが、現在のターミナルセッションはまだ認識していません。以下を実行：
 
 ```bash
 source $HOME/.local/bin/env
 ```
 
-Then add it permanently:
+永続化するには：
 ```bash
 echo 'source $HOME/.local/bin/env' >> ~/.zshrc
 ```
 
-### Authentication failed / credentials file not found
+### 認証失敗／資格情報ファイルが見つからない
 
-Make sure you are using the **absolute path** to your credentials file — not a relative path, not `~/`. Example:
+資格情報ファイルは**絶対パス**を使用しているか確認してください（相対パスや`~/`は不可）。例：
 ```
 /Users/yourname/Documents/client_secrets.json   ✅
 ~/Documents/client_secrets.json                 ✅
 client_secrets.json                              ❌
 ```
 
-### MCP only works in Claude Desktop app, not the website
+### MCPがClaude Desktopアプリでのみ動作し、Webでは動かない
 
-The MCP server runs locally on your machine. It only works in the **Claude Desktop app** (downloaded from [claude.ai/download](https://claude.ai/download)), not in the claude.ai browser interface.
+MCPサーバーはローカルで実行されます。[claude.ai/download](https://claude.ai/download)からダウンロードした**Claude Desktopアプリ**でのみ動作し、claude.aiのブラウザ版では動作しません。
 
-### AI Client Configuration Issues
+### AIクライアントの設定問題
 
-1. Make sure all file paths in your config are correct absolute paths
-2. Fully quit (`Cmd+Q`) and reopen the app after any config change — just closing the window is not enough
-3. Ask your AI assistant to "call get_capabilities" — it will report the exact auth status and error
+1. 設定内の全ファイルパスが正しい絶対パスか確認
+2. 設定変更後は必ずアプリを完全に終了（`Cmd+Q`）して再起動—ウィンドウを閉じるだけでは不十分
+3. AIアシスタントに「get_capabilitiesを呼んで」と依頼すれば、正確な認証状態とエラーを報告してくれます
 
 ---
 
-## Safety: Destructive Operations
+## 安全性：破壊的操作
 
-By default, `add_site`, `delete_site`, and `delete_sitemap` are disabled. To enable them:
+デフォルトで`add_site`、`delete_site`、`delete_sitemap`は無効化されています。有効化するには：
 
 ```json
 "GSC_ALLOW_DESTRUCTIVE": "true"
@@ -412,21 +420,21 @@ By default, `add_site`, `delete_site`, and `delete_sitemap` are disabled. To ena
 
 ---
 
-## Remote Deployment & Docker (Advanced)
+## リモートデプロイ／Docker（上級者向け）
 
-The standard setup runs the server locally. This section is only for users who want to run it on a remote server or in a container.
+通常はローカルで実行します。このセクションはリモートサーバーやコンテナで実行したい場合のみ対象です。
 
-### HTTP Transport
+### HTTPトランスポート
 
 ```bash
 MCP_TRANSPORT=sse MCP_HOST=0.0.0.0 MCP_PORT=3001 python gsc_server.py
 ```
 
-| Variable | Default | Description |
+| 変数 | デフォルト | 説明 |
 |---|---|---|
-| `MCP_TRANSPORT` | `stdio` | Set to `sse` for network/remote use |
-| `MCP_HOST` | `127.0.0.1` | Host to bind |
-| `MCP_PORT` | `3001` | Port to bind |
+| `MCP_TRANSPORT` | `stdio` | ネットワーク/リモート利用の場合は`sse`に設定 |
+| `MCP_HOST` | `127.0.0.1` | バインドするホスト |
+| `MCP_PORT` | `3001` | バインドするポート |
 
 ### Docker
 
@@ -443,58 +451,60 @@ docker run \
   mcp-gsc
 ```
 
----
-
-## Related Tools
-
-**[Advanced GSC Visualizer](https://www.advancedgsc.com/?utm_source=github&utm_medium=readme&utm_campaign=mcp-gsc&utm_content=related-tools)** — A Chrome extension (14,000+ users) with interactive charts, one-click export of up to 25,000 rows, keyword cannibalization detection, and an AI assistant — all directly inside Google Search Console. Built by the same author. [Install from the Chrome Web Store →](https://chromewebstore.google.com/detail/advanced-gsc-visualizer/cdiccpnglfpnclonhpchpaaoigfpieel)
+（AWS Bedrock AgentCoreでWIF/ADCを使う場合は、`GSC_CREDENTIALS_PATH`の代わりに`GOOGLE_APPLICATION_CREDENTIALS`をマウントし、AWS一時クレデンシャルを環境変数で注入してください。詳細は本 README 冒頭の「なぜこのフォークを作ったか」を参照。）
 
 ---
 
-## Contributing
+## 関連ツール
 
-Found a bug or have an idea for improvement? Open an issue or submit a pull request on GitHub.
-
----
-
-## License
-
-MIT License. See the [LICENSE](LICENSE) file for details.
+本家作者による関連ツールの情報は [本家リポジトリ](https://github.com/AminForou/mcp-gsc#related-tools) を参照してください。
 
 ---
 
-## Changelog
+## コントリビュート
 
-### [0.3.2] — April 2026
-- **OAuth browser flow fixed for uvx** — removed `isatty` block that prevented the OAuth browser window from opening when running as an MCP subprocess on macOS. OAuth + `uvx` now works out of the box.
-- **`get_capabilities` tool** — returns all available tools grouped by category plus live auth status in one call.
-- **Better auth error messages** — all tools now explicitly tell you to call `reauthenticate` when credentials are missing or expired.
-- **Improved `list_properties` description** — better semantic tool discovery in clients that use lazy tool loading.
+このフォークへの修正はIssueまたはPull Requestでどうぞ。WIF/ADC以外の汎用的な修正は、当社内だけではなく[本家](https://github.com/AminForou/mcp-gsc/issues)への逆輸入（upstream）も検討してください。
 
-### [0.3.1] — April 2026
-- Fixed `list_properties` masking real auth errors; fail-fast on missing credentials.
+---
 
-### [0.3.0] — April 2026
-- Cursor Marketplace plugin with 4 bundled SEO skills
-- Stable token storage in platform user config dir (survives `uvx` upgrades)
-- Structured JSON output for all data tools
-- 39 unit tests
+## ライセンス
 
-### [0.2.2] — April 2026
-- Safety mode for destructive tools (disabled by default)
-- HTTP/SSE transport for remote deployments
+MITライセンス。詳細は[LICENSE](LICENSE)ファイルを参照。
+
+---
+
+## 変更履歴（本家分）
+
+### [0.3.2] — 2026年4月
+- **uvx利用時のOAuthブラウザフローを修正** — macOS上でMCPサブプロセスとして実行した際にブラウザログイン画面が開かない原因だった`isatty`チェックを削除。
+- **`get_capabilities`ツール** — 全ツールをカテゴリ別に返し、現在の認証状態も一度に返す。
+- **認証エラーメッセージを改善** — 資格情報が不足/失効している場合、`reauthenticate`を呼ぶよう明示する。
+- **`list_properties`の説明を改善** — 遅延ツール読み込みを使うクライアントでのツール発見精度を向上。
+
+### [0.3.1] — 2026年4月
+- `list_properties`が本当の認証エラーを隠蔽していた不具合を修正。資格情報未設定時は即座に失敗するように。
+
+### [0.3.0] — 2026年4月
+- Cursor Marketplaceプラグイン（4つのSEOスキル同梱）
+- トークン保存先をプラットフォームのユーザー設定ディレクトリに安定化（`uvx`アップデートでも消えない）
+- 全データツールで構造化JSON出力
+- 単体テスト39件
+
+### [0.2.2] — 2026年4月
+- 破壊的ツールの安全モード（デフォルト無効）
+- リモートデプロイ向けHTTP/SSEトランスポート
 - Dockerfile
 
-### [0.2.1] — March 2026
-- `reauthenticate` tool for switching Google accounts
-- Fixed sitemap TypeError crash
-- Fixed domain property 404 errors
+### [0.2.1] — 2026年3月
+- アカウント切り替え用`reauthenticate`ツール
+- サイトマップのTypeErrorクラッシュを修正
+- ドメインプロパティの404エラーを修正
 
-### [0.2.0] — March 2026
-- `dataState: "all"` by default (matches GSC dashboard)
-- Flexible `row_limit` parameter (up to 500)
-- Multi-dimension filtering for advanced analytics
+### [0.2.0] — 2026年3月
+- `dataState: "all"`をデフォルト化（GSCダッシュボードと一致）
+- 柔軟な`row_limit`パラメータ（最大500）
+- 高度なアナリティクス向け多次元フィルタリング
 
-### [0.1.0] — Initial release
-- 19 tools covering property management, search analytics, URL inspection, and sitemap management
-- OAuth and service account authentication
+### [0.1.0] — 初回リリース
+- プロパティ管理・検索アナリティクス・URL検査・サイトマップ管理を網羅する19ツール
+- OAuthおよびサービスアカウント認証
