@@ -87,6 +87,15 @@ if os.path.exists(_OLD_TOKEN) and not os.path.exists(TOKEN_FILE):
 # Environment variable to skip OAuth authentication
 SKIP_OAUTH = os.environ.get("GSC_SKIP_OAUTH", "").lower() in ("true", "1", "yes")
 
+# Application Default Credentials (ADC) support — a final fallback for headless/keyless
+# deployments (AWS Workload Identity Federation, GCE/Cloud Run/GKE metadata, gcloud user
+# ADC). Captured at import time, like the other flags above, rather than re-read from
+# os.environ inside get_gsc_service() at call time, for the same reason documented on
+# GSC_CREDENTIALS_PATH: the env var may have been cleared by the caller after module
+# import (e.g. by test frameworks or MCP hosts that scope env vars narrowly).
+GOOGLE_APPLICATION_CREDENTIALS = _expand_path(os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"))
+USE_ADC = os.environ.get("GSC_USE_ADC", "").lower() in ("true", "1", "yes")
+
 # Safety flag for destructive operations (add_site, delete_site, delete_sitemap).
 # Default is false — set GSC_ALLOW_DESTRUCTIVE=true to enable these tools.
 ALLOW_DESTRUCTIVE = os.environ.get("GSC_ALLOW_DESTRUCTIVE", "false").lower() in ("true", "1", "yes")
@@ -162,7 +171,7 @@ def get_gsc_service():
     # all of the above. This is what lets headless/server deployments (e.g. AWS
     # Bedrock AgentCore using WIF instead of long-lived service-account keys)
     # authenticate without a browser or a downloaded key.
-    if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") or os.environ.get("GSC_USE_ADC", "").lower() in ("true", "1", "yes"):
+    if GOOGLE_APPLICATION_CREDENTIALS or USE_ADC:
         try:
             adc_creds, _ = google.auth.default(scopes=SCOPES)
             return build("searchconsole", "v1", credentials=adc_creds, cache_discovery=False)

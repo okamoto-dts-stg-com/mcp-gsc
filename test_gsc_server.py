@@ -218,6 +218,119 @@ class TestAuth(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# TestADCFallback (Application Default Credentials / Workload Identity Federation)
+# ---------------------------------------------------------------------------
+
+class TestADCFallback(unittest.TestCase):
+    """Tests for the google.auth.default() fallback added for headless/keyless
+    deployments (AWS Workload Identity Federation, GCE/Cloud Run/GKE metadata,
+    gcloud user ADC). See issue #37.
+    """
+
+    def test_adc_used_when_google_application_credentials_set(self):
+        """If GOOGLE_APPLICATION_CREDENTIALS is set, get_gsc_service() must call
+        google.auth.default() and build the service from its result — even though
+        no service-account/OAuth credentials are configured. This is what makes
+        Workload Identity Federation (external_account JSON) work, since
+        service_account.Credentials.from_service_account_file() rejects that format.
+        """
+        mod = _load_module({
+            "GSC_SKIP_OAUTH": "true",
+            "GOOGLE_APPLICATION_CREDENTIALS": "/tmp/definitely-does-not-exist-wif-config.json",
+        })
+        mock_creds = MagicMock()
+        mock_service = _make_service()
+
+        with patch("google.auth.default", return_value=(mock_creds, "some-project")) as mock_default, \
+             patch("gsc_server.build", return_value=mock_service) as mock_build:
+            result = mod.get_gsc_service()
+
+        mock_default.assert_called_once_with(scopes=mod.SCOPES)
+        mock_build.assert_called_once_with("searchconsole", "v1", credentials=mock_creds, cache_discovery=False)
+        self.assertIs(result, mock_service)
+
+    def test_adc_used_when_gsc_use_adc_true_without_google_application_credentials(self):
+        """GSC_USE_ADC=true must trigger the ADC path even when
+        GOOGLE_APPLICATION_CREDENTIALS is unset — this is what allows fully
+        keyless auth on GCE/Cloud Run/GKE, where credentials come from the
+        metadata server rather than a file.
+        """
+        mod = _load_module({
+            "GSC_SKIP_OAUTH": "true",
+            "GSC_USE_ADC": "true",
+            "GOOGLE_APPLICATION_CREDENTIALS": "",
+        })
+        mock_creds = MagicMock()
+        mock_service = _make_service()
+
+        with patch("google.auth.default", return_value=(mock_creds, None)) as mock_default, \
+             patch("gsc_server.build", return_value=mock_service):
+            result = mod.get_gsc_service()
+
+        mock_default.assert_called_once_with(scopes=mod.SCOPES)
+        self.assertIs(result, mock_service)
+
+    def test_adc_not_attempted_when_neither_flag_set(self):
+        """Without GOOGLE_APPLICATION_CREDENTIALS or GSC_USE_ADC, google.auth.default()
+        must never be called — existing OAuth/service-account behavior is unchanged.
+        """
+        mod = _load_module({
+            "GSC_SKIP_OAUTH": "true",
+            "GOOGLE_APPLICATION_CREDENTIALS": "",
+        })
+
+        with patch("google.auth.default") as mock_default:
+            with self.assertRaises(FileNotFoundError):
+                mod.get_gsc_service()
+
+        mock_default.assert_not_called()
+
+    def test_adc_failure_falls_through_to_final_error_message(self):
+        """If google.auth.default() itself raises (e.g. no ambient credentials
+        available), get_gsc_service() must not propagate that raw exception —
+        it should fall through to the standard FileNotFoundError that mentions
+        all auth options, matching the existing OAuth/service-account fallback
+        behavior.
+        """
+        mod = _load_module({
+            "GSC_SKIP_OAUTH": "true",
+            "GSC_USE_ADC": "true",
+        })
+
+        with patch("google.auth.default", side_effect=Exception("no ambient credentials")):
+            with self.assertRaises(FileNotFoundError) as ctx:
+                mod.get_gsc_service()
+
+        msg = str(ctx.exception)
+        self.assertIn("GOOGLE_APPLICATION_CREDENTIALS", msg)
+        self.assertIn("GSC_USE_ADC", msg)
+
+    def test_adc_failure_does_not_write_to_stdout(self):
+        """Mirrors TestStdoutClean: an ADC failure must log via `logging`, not
+        print(), to avoid corrupting the MCP stdio transport.
+        """
+        mod = _load_module({
+            "GSC_SKIP_OAUTH": "true",
+            "GSC_USE_ADC": "true",
+        })
+
+        captured = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = captured
+        try:
+            with patch("google.auth.default", side_effect=Exception("no ambient credentials")):
+                try:
+                    mod.get_gsc_service()
+                except Exception:
+                    pass
+        finally:
+            sys.stdout = old_stdout
+
+        stdout_output = captured.getvalue()
+        self.assertEqual(stdout_output, "", f"Unexpected stdout: {stdout_output!r}")
+
+
+# ---------------------------------------------------------------------------
 # Shared fixture helper
 # ---------------------------------------------------------------------------
 
