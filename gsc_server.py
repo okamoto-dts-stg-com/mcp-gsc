@@ -152,7 +152,23 @@ def get_gsc_service():
                 return build("searchconsole", "v1", credentials=creds, cache_discovery=False)
             except Exception as e:
                 continue  # Try the next path if this one fails
-    
+
+    # Try Application Default Credentials (ADC) as a final fallback.
+    # google.oauth2.service_account.Credentials.from_service_account_file() only
+    # accepts JSON keys with "type": "service_account" — it cannot parse Workload
+    # Identity Federation ("external_account") configs, GCE/Cloud Run metadata
+    # credentials, or gcloud user ADC. google.auth.default() auto-detects the
+    # credential type instead of assuming a service-account key file, so it covers
+    # all of the above. This is what lets headless/server deployments (e.g. AWS
+    # Bedrock AgentCore using WIF instead of long-lived service-account keys)
+    # authenticate without a browser or a downloaded key.
+    if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") or os.environ.get("GSC_USE_ADC", "").lower() in ("true", "1", "yes"):
+        try:
+            adc_creds, _ = google.auth.default(scopes=SCOPES)
+            return build("searchconsole", "v1", credentials=adc_creds, cache_discovery=False)
+        except Exception as e:
+            logging.warning("ADC authentication failed: %s", e)
+
     # If we get here, none of the authentication methods worked.
     # Note: uvx users can't place files "in the script directory" because uvx runs
     # the code from ~/.cache/uv/archive-v0/<hash>/lib/python*/site-packages/ — an
@@ -166,6 +182,10 @@ def get_gsc_service():
         f"2. Set GSC_CREDENTIALS_PATH to an absolute path, or (for clone installs) "
         f"place a service account credentials file in one of these locations: "
         f"{', '.join([p for p in POSSIBLE_CREDENTIAL_PATHS[1:] if p])}\n"
+        f"3. Set GOOGLE_APPLICATION_CREDENTIALS to an absolute path (service account key, "
+        f"Workload Identity Federation config, or any other ADC-compatible credentials "
+        f"file), or set GSC_USE_ADC=true to force this path with ambient credentials "
+        f"(e.g. GCE/Cloud Run metadata).\n"
         f"\n"
         f"If you installed via uvx, the 'script directory' is an internal uv cache "
         f"that you cannot access — you MUST use the environment variables with "
