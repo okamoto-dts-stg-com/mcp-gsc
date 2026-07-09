@@ -15,8 +15,8 @@
 
 ### 具体的な使い方（WIFでの活用方法）
 
-1. AWSの実行ロール（例: Lambda/Fargate/AgentCore RuntimeなどのIAMロール）が持つAWS STSの一時クレデンシャル（`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN`）を取得し、MCPサーバーを起動する子プロセスの環境変数として渡す。
-2. GCP側のWorkload Identity Federation設定ファイル（`type: external_account`、AWSのIAMロールをGCPサービスアカウントに偽装（impersonate）させる設定）を用意する。EC2以外（Lambda/Fargate/AgentCore Runtimeなど）で動かす場合は、設定ファイル内の`credential_source.region_url`/`credential_source.url`（EC2メタデータサーバー参照用）を削除し、代わりに`environment_id: "aws1"`方式（環境変数経由でAWS一時クレデンシャルを渡す方式）に調整する。
+1. AWSの実行ロール（例: Lambda/FargateなどのIAMロール）が持つAWS STSの一時クレデンシャル（`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN`）を取得し、MCPサーバーを起動する子プロセスの環境変数として渡す。
+2. GCP側のWorkload Identity Federation設定ファイル（`type: external_account`、AWSのIAMロールをGCPサービスアカウントに偽装（impersonate）させる設定）を用意する。EC2以外（Lambda/Fargateなど）で動かす場合は、設定ファイル内の`credential_source.region_url`/`credential_source.url`（EC2メタデータサーバー参照用）を削除し、代わりに`environment_id: "aws1"`方式（環境変数経由でAWS一時クレデンシャルを渡す方式）に調整する。
 3. その設定ファイルのパスを環境変数`GOOGLE_APPLICATION_CREDENTIALS`としてMCPサーバーに渡す。
 4. 本フォークで追加した`get_gsc_service()`のADC（Application Default Credentials）フォールバックが、`google.auth.default(scopes=SCOPES)`経由でこのWIF設定を自動的に読み込み、ブラウザ操作や長期キーなしでSearch Console APIを呼び出せるようにする。
 
