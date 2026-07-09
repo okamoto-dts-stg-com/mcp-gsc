@@ -37,7 +37,7 @@ async def gsc_sample():
 
     # GCPコンソール > IAMと管理 > Workload Identity プール > 対象のプロバイダー
     # > 「構成をダウンロード」から取得したJSONファイルのパス。
-    # EC2ではなくFargate/Lambda/AgentCore RuntimeなどでAWS STSクレデンシャルを
+    # EC2ではなくFargate/LambdaなどでAWS STSクレデンシャルを
     # 環境変数経由で渡す場合は、ダウンロードしたJSON内の
     # credential_source.region_url / credential_source.url を削除しておくこと。
     wi_json_path = "/path/to/workload-identity-config.json"
