@@ -172,7 +172,7 @@ if __name__ == "__main__":
 
 #### オプションC — Workload Identity Federation / ADC（このフォークで新規追加、ヘッドレスサーバー向け）
 
-サービスアカウントJSONキーをコンテナに配置したくない場合（AWS Bedrock AgentCoreなど）の方法です。
+サービスアカウントJSONキーをコンテナに配置したくない場合（AWS Fargateなど）の方法です。
 
 1. GCP側でWorkload Identity PoolとProviderを作成し、AWSのIAMロールがGCPサービスアカウントを偽装（impersonate）できるように設定する（GCP公式ドキュメント参照）。
 2. そのサービスアカウントのメールアドレスをGSCプロパティの「ユーザーと権限」に登録（Option Bの手順6と同じ）。
@@ -509,7 +509,7 @@ docker run \
   mcp-gsc
 ```
 
-（AWS Bedrock AgentCoreでWIF/ADCを使う場合は、`GSC_CREDENTIALS_PATH`の代わりに`GOOGLE_APPLICATION_CREDENTIALS`をマウントし、AWS一時クレデンシャルを環境変数で注入してください。詳細は本 README 冒頭の「なぜこのフォークを作ったか」を参照。）
+（AWS FargateでWIF/ADCを使う場合は、`GSC_CREDENTIALS_PATH`の代わりに`GOOGLE_APPLICATION_CREDENTIALS`をマウントし、AWS一時クレデンシャルを環境変数で注入してください。詳細は本 README 冒頭の「なぜこのフォークを作ったか」を参照。）
 
 ---
 
