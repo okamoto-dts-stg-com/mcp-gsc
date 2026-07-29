@@ -533,6 +533,9 @@ MITライセンス。詳細は[LICENSE](LICENSE)ファイルを参照。
 
 ## 変更履歴（本家分）
 
+### [0.3.3] — 2026年7月
+- **`mcp` 2.0による新規インストール破損を修正** — `mcp[cli]<2.0.0`に固定。`mcp` SDK 2.0.0（2026年7月28日リリース）で`mcp.server.fastmcp`モジュールが削除されたため、新規の`uvx mcp-search-console`インストールが`ModuleNotFoundError: No module named 'mcp.server.fastmcp'`で起動時にクラッシュする不具合があった。新規インストールは再び動作する1.x系SDKを解決するようになった（`--with "mcp<2"`のような回避策は不要）。
+
 ### [0.3.2] — 2026年4月
 - **uvx利用時のOAuthブラウザフローを修正** — macOS上でMCPサブプロセスとして実行した際にブラウザログイン画面が開かない原因だった`isatty`チェックを削除。
 - **`get_capabilities`ツール** — 全ツールをカテゴリ別に返し、現在の認証状態も一度に返す。
