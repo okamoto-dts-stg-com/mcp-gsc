@@ -52,7 +52,7 @@ async def gsc_sample():
                 command="uvx",
                 # 本家PyPI版ではなく、このADC対応フォークを明示的に指定する
                 args=[
-                    "--from", "git+https://github.com/okamoto-dts-stg-com/mcp-gsc@v0.3.2-adc2",
+                    "--from", "git+https://github.com/okamoto-dts-stg-com/mcp-gsc@v0.4.1-adc4",
                     "mcp-search-console",
                 ],
                 env={
