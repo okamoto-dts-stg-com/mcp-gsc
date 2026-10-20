@@ -89,6 +89,11 @@ if __name__ == "__main__":
 
 ### 本家の更新履歴
 
+#### [0.4.1] — 2026年9月
+- **`check_indexing_issues`を並列化** — 10件バッチが `sc-domain:*` プロパティでタイムアウトしなくなった。
+- **`batch_url_inspection`の破壊的変更** — 行ごとの `verdict` を `index_verdict` に改名（リッチリザルトの verdict と区別するため）。
+- リッチリザルトの不具合報告、期間比較の増減方向、`sort_by` のクライアント側ソートなど、0.4.0 の修正も含む。詳細は末尾の「変更履歴（本家分）」を参照。
+
 #### [0.3.2] — 2026年4月
 - **uvx利用時のOAuthブラウザフローを修正** — macOS上でMCPサブプロセスとして実行した際にブラウザログイン画面が開かない原因だった`isatty`チェックを削除。`uvx`だけでOAuthがそのまま動作するようになった。
 - **`get_capabilities`ツールを追加** — 一度の呼び出しで利用可能な全ツール一覧と現在の認証状態を確認できる。AIアシスタントがどのツールを使えるか分からない場合に有用。
@@ -523,6 +528,8 @@ docker run \
 
 このフォークへの修正はIssueまたはPull Requestでどうぞ。WIF/ADC以外の汎用的な修正は、当社内だけではなく[本家](https://github.com/AminForou/mcp-gsc/issues)への逆輸入（upstream）も検討してください。
 
+不具合報告・修正に貢献してくれた方々（[@patrickweh](https://github.com/patrickweh)、[@remotesensei](https://github.com/remotesensei)、[@JKdreaming](https://github.com/JKdreaming)、[@kuldiph](https://github.com/kuldiph) ほか）に感謝します。
+
 ---
 
 ## ライセンス
@@ -532,6 +539,18 @@ MITライセンス。詳細は[LICENSE](LICENSE)ファイルを参照。
 ---
 
 ## 変更履歴（本家分）
+
+### [0.4.1] — 2026年9月
+- `check_indexing_issues` がURLを並列検査するようになった（#31と同じ修正）。`sc-domain:*` プロパティでも10件バッチがタイムアウトしにくくなった。（#55、[@kuldiph](https://github.com/kuldiph)）
+- `get_search_by_page_query` に残っていた、Search Analytics APIが無視する `orderBy` を削除。（#55、[@kuldiph](https://github.com/kuldiph)）
+
+### [0.4.0] — 2026年9月
+- `inspect_url_enhanced` と `batch_url_inspection` のリッチリザルト不具合報告を修正。issues は API が実際に返す `detectedItems[].items[].issues[]`（`issueMessage`）から読むようになり、問題が黙って落ちなくなった。（#46、#48、[@patrickweh](https://github.com/patrickweh)）
+- `batch_url_inspection` がURLを並列検査するようになり、遅い `sc-domain:*` プロパティでも10件バッチがクライアントのタイムアウト内に収まりやすくなった。（#31、[@remotesensei](https://github.com/remotesensei)）
+- `compare_search_periods` の増減を、期間2を基準にした期間1の相対値（正 = 期間1の方が良い）として計算し、方向をドキュメント化した。（#42、[@JKdreaming](https://github.com/JKdreaming)）
+- `get_advanced_search_analytics` は、APIが無視する `orderBy` を送る代わりに `sort_by` / `sort_direction` をクライアント側で適用する。（#54、[@kuldiph](https://github.com/kuldiph)）
+- 裸の `except:` を `except Exception:` に置き換え、`KeyboardInterrupt` / `SystemExit` を飲み込まないようにした。（#53、[@kuldiph](https://github.com/kuldiph)）
+- **破壊的変更:** `batch_url_inspection` の行ごとの `verdict` を `index_verdict` に改名。
 
 ### [0.3.3] — 2026年7月
 - **`mcp` 2.0による新規インストール破損を修正** — `mcp[cli]<2.0.0`に固定。`mcp` SDK 2.0.0（2026年7月28日リリース）で`mcp.server.fastmcp`モジュールが削除されたため、新規の`uvx mcp-search-console`インストールが`ModuleNotFoundError: No module named 'mcp.server.fastmcp'`で起動時にクラッシュする不具合があった。新規インストールは再び動作する1.x系SDKを解決するようになった（`--with "mcp<2"`のような回避策は不要）。
